@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Painel IoT — Monitoramento Térmico de Data Center de IA (ESP32 + Supabase)</title>
+  <link rel="stylesheet" href="./styles.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="container topbar-inner">
+      <div class="brand">
+        <span class="brand-badge">AI DC</span>
+        <div>
+          <h1>Monitoramento Térmico — Data Center de IA (Rack de GPUs)</h1>
+          <p class="subtitle">ESP32 + DHT22 (Wokwi) → API REST (Supabase Edge Function) → Supabase DB → Cloudflare Pages</p>
+        </div>
+      </div>
+      <div class="topbar-actions">
+        <span id="transmissionBadge" class="status-pill status-waiting">
+          <span class="dot"></span>
+          <span id="transmissionText">Aguardando conexão com a API...</span>
+        </span>
+        <button id="btnToggleConfig" class="btn btn-outline" type="button">Configurar API</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="container main-content">
+    <!-- Banner de Dados Desatualizados (exibido automaticamente quando a transmissão do Wokwi é interrompida) -->
+    <div id="staleBanner" class="banner banner-stale hidden" role="status">
+      <div class="banner-title">⚠️ DADOS DESATUALIZADOS — TRANSMISSÃO INTERROMPIDA</div>
+      <div id="staleBannerDesc" class="banner-desc">
+        Nenhuma nova leitura foi recebida do ESP32 nos últimos 15 segundos. Assim que a simulação no Wokwi for retomada, o painel voltará a atualizar automaticamente.
+      </div>
+    </div>
+
+    <!-- Banner de Condição de Alerta Crítico -->
+    <div id="alertBanner" class="banner banner-alert hidden" role="alert">
+      <div class="banner-title">🚨 CONDIÇÃO DE ALERTA ATIVA — SUPERAQUECIMENTO NO RACK DE GPUs (&gt; 30,0 °C)!</div>
+      <div id="alertBannerDesc" class="banner-desc">
+        A temperatura tratada ultrapassou o limite térmico de 30,00 °C — risco de Thermal Throttling no cluster de IA.
+      </div>
+    </div>
+
+    <!-- Painel de Configuração da API REST (Sem segredos no código público) -->
+    <section id="configPanel" class="card config-card hidden">
+      <div class="card-header">
+        <h2>Conexão com a API REST (Supabase Edge Function)</h2>
+        <span class="badge-note">Credenciais mantidas fora do código-fonte público</span>
+      </div>
+      <p class="config-help">
+        Informe a URL da sua Supabase Edge Function (<code>https://&lt;PROJECT_REF&gt;.supabase.co/functions/v1/telemetry</code>).
+        Os dados ficam salvos apenas no <code>localStorage</code> do seu navegador.
+      </p>
+      <form id="configForm" class="config-grid">
+        <div class="form-group">
+          <label for="apiUrlInput">URL da API REST (HTTPS)</label>
+          <input
+            id="apiUrlInput"
+            type="url"
+            value="https://tvpctlctyjzgdfzcxyus.supabase.co/functions/v1/telemetry"
+            placeholder="https://tvpctlctyjzgdfzcxyus.supabase.co/functions/v1/telemetry"
+            required
+          />
+        </div>
+        <div class="form-group">
+          <label for="apiKeyInput">Token Bearer / Anon Key (Opcional se JWT estiver desativado na função)</label>
+          <input
+            id="apiKeyInput"
+            type="password"
+            placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6..."
+          />
+        </div>
+        <div class="form-group">
+          <label for="staleSecondsInput">Tempo limite p/ Dados Desatualizados (s)</label>
+          <input id="staleSecondsInput" type="number" min="8" max="120" value="15" required />
+        </div>
+        <div class="config-buttons">
+          <button type="submit" class="btn btn-primary">Salvar e Consultar API</button>
+          <button type="button" id="btnRefreshNow" class="btn btn-outline">Consultar Agora</button>
+        </div>
+      </form>
+    </section>
+
+    <!-- Cartões Principais: Valor Atual, Unidade, Horário da Última Atualização, Condição de Alerta e Dispositivo -->
+    <section class="kpi-grid">
+      <article class="card kpi-card">
+        <span class="kpi-label">Valor Atual (Média Tratada)</span>
+        <div class="kpi-value-row">
+          <span id="currentValue" class="kpi-value">--</span>
+          <span id="currentUnit" class="kpi-unit">°C</span>
+        </div>
+        <div class="kpi-meta">
+          <span>Leitura Bruta Sensor: <strong id="rawValue">--</strong></span>
+          <span>Umidade: <strong id="humidityValue">--</strong></span>
+        </div>
+      </article>
+
+      <article class="card kpi-card">
+        <span class="kpi-label">Condição de Alerta</span>
+        <div id="alertStatusBox" class="alert-box alert-box-neutral">
+          <span id="alertStatusTitle" class="alert-status-title">AGUARDANDO DADOS</span>
+          <span id="alertStatusRule" class="alert-status-rule">Limite configurado: &gt; 30,00 °C</span>
+        </div>
+        <div class="kpi-meta">
+          <span>Grandeza: <strong id="metricName">temperatura_rack_gpu</strong></span>
+        </div>
+      </article>
+
+      <article class="card kpi-card">
+        <span class="kpi-label">Horário da Última Atualização</span>
+        <div id="lastUpdateTime" class="kpi-time">--:--:--</div>
+        <div id="lastUpdateDate" class="kpi-date">Aguardando primeira leitura</div>
+        <div class="kpi-meta">
+          <span>Idade da leitura: <strong id="readingAge">--</strong></span>
+          <span>Status: <strong id="freshnessState">--</strong></span>
+        </div>
+      </article>
+
+      <article class="card kpi-card">
+        <span class="kpi-label">Dispositivo &amp; Armazenamento</span>
+        <div id="deviceIdText" class="kpi-device">esp32-rack-ia-01</div>
+        <div class="kpi-meta">
+          <span>Intervalo do ESP32: <strong>5 segundos</strong></span>
+          <span>Polling do Painel: <strong>3 segundos</strong></span>
+          <span>Registros no Histórico: <strong id="historyCount">0</strong></span>
+        </div>
+      </article>
+    </section>
+
+    <!-- Gráfico de Histórico e Inspetor da API REST -->
+    <section class="content-grid">
+      <article class="card chart-card">
+        <div class="card-header">
+          <div>
+            <h2>Curva de Histórico de Leituras</h2>
+            <p class="card-subtitle">Comparação entre leitura bruta do DHT22, média móvel calculada no ESP32 e limite de alerta</p>
+          </div>
+          <button id="btnManualPoll" class="btn btn-sm btn-outline" type="button">Atualizar</button>
+        </div>
+        <div class="chart-container">
+          <canvas id="telemetryChart"></canvas>
+        </div>
+      </article>
+
+      <article class="card api-card">
+        <div class="card-header">
+          <div>
+            <h2>Consulta Direta à API REST (GET)</h2>
+            <p class="card-subtitle">Última resposta JSON retornada pela Supabase Edge Function</p>
+          </div>
+          <span id="httpStatusBadge" class="badge-code">HTTP --</span>
+        </div>
+        <pre id="apiJsonPreview" class="code-preview">Configure a URL da API REST acima para visualizar o JSON retornado pelo endpoint GET /functions/v1/telemetry.</pre>
+      </article>
+    </section>
+
+    <!-- Tabela de Histórico Persistido no Supabase -->
+    <section class="card table-card">
+      <div class="card-header">
+        <div>
+          <h2>Histórico de Leituras Armazenadas no Banco (Supabase)</h2>
+          <p class="card-subtitle">
+            Demonstra a persistência contínua das leituras enviadas pelo ESP32 mesmo quando o painel web esteve fechado
+          </p>
+        </div>
+      </div>
+      <div class="table-wrapper">
+        <table class="history-table">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Horário (Local)</th>
+              <th>Dispositivo</th>
+              <th>Grandeza Medida</th>
+              <th>Valor Tratado</th>
+              <th>Valor Bruto</th>
+              <th>Umidade</th>
+              <th>Unidade</th>
+              <th>Condição</th>
+            </tr>
+          </thead>
+          <tbody id="historyTableBody">
+            <tr>
+              <td colspan="9" class="empty-row">Nenhuma leitura carregada ainda.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer container">
+    <p>
+      Projeto Integrador de Monitoramento IoT — Arquitetura de Computadores | Simulação ESP32 + DHT22 (Wokwi), API REST (Supabase Edge Function), Banco PostgreSQL (Supabase) e Frontend (Cloudflare Pages).
+    </p>
+  </footer>
+
+  <script src="./app.js"></script>
+</body>
+</html>
