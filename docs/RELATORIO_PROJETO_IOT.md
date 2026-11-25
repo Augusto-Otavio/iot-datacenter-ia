@@ -1,5 +1,6 @@
 # Relatório Técnico — Projeto Integrador de Monitoramento IoT
 **Disciplina:** Arquitetura de Computadores  
+**Integrantes:** Otavio Augusto e Caio Garbin  
 **Tema do Projeto:** Monitoramento Térmico de Rack de GPUs em Data Center de IA  
 **Arquitetura Adotada:** Opção B — Envio Direto por HTTPS (Wokwi ESP32 → Supabase Edge Function → Supabase PostgreSQL → Cloudflare Pages)
 
@@ -116,7 +117,5 @@ A escolha do intervalo de coleta (`5 segundos` no ESP32 e `3 segundos` de consul
 
 | Nome do Integrante | Usuário GitHub | Principais Contribuições no Desenvolvimento e Apresentação |
 | :--- | :--- | :--- |
-| **Integrante 1** | `@usuario1` | Desenvolvimento do firmware do ESP32 e circuito no Wokwi (`sketch.ino`, `diagram.json`), implementação do filtro de média móvel e lógica de alerta térmico (> 30 °C). |
-| **Integrante 2** | `@usuario2` | Modelagem do banco PostgreSQL no Supabase (`schema.sql`) e desenvolvimento da API REST na Supabase Edge Function (`functions/telemetry/index.ts`). |
-| **Integrante 3** | `@usuario3` | Desenvolvimento e publicação do painel Frontend no Cloudflare Pages (`index.html`, `styles.css`, `app.js`), gráfico histórico e detecção de dados desatualizados. |
-| **Integrante 4** *(se houver)* | `@usuario4` | Execução da bateria de testes integrados, redação do relatório técnico de Arquitetura de Computadores e gravação/edição do vídeo de demonstração. |
+| **Otavio Augusto** | `@Augusto-Otavio` | Desenvolvimento do firmware do ESP32 e circuito no Wokwi (`sketch.ino`, `diagram.json`), implementação do filtro de média móvel e lógica de alerta térmico (> 30 °C), configuração da API REST na Supabase Edge Function (`telemetry`) e publicação do painel no Cloudflare Pages. |
+| **Caio Garbin** | — | Modelagem da estrutura do banco PostgreSQL no Supabase (`schema.sql`), desenvolvimento e validação do painel Frontend (`index.html`, `styles.css`, `app.js`), execução da bateria de testes integrados (alerta, dados desatualizados e persistência offline), redação do relatório técnico e gravação da apresentação. |
