@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "author": "Grupo Projeto Integrador IoT - AI Data Center",
+  "editor": "wokwi",
+  "parts": [
+    {
+      "type": "wokwi-esp32-devkit-v1",
+      "id": "esp",
+      "top": -15.4,
+      "left": -35.8,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-dht22",
+      "id": "dht1",
+      "top": -42.9,
+      "left": 145.5,
+      "attrs": {
+        "temperature": "22.5",
+        "humidity": "45.0"
+      }
+    },
+    {
+      "type": "wokwi-led",
+      "id": "led1",
+      "top": 95.0,
+      "left": 152.0,
+      "attrs": {
+        "color": "red",
+        "label": "Alerta Rack (> 30°C)"
+      }
+    },
+    {
+      "type": "wokwi-resistor",
+      "id": "r1",
+      "top": 155.0,
+      "left": 135.0,
+      "attrs": {
+        "value": "220"
+      }
+    }
+  ],
+  "connections": [
+    [ "esp:TX0", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX0", "$serialMonitor:TX", "", [] ],
+    [ "dht1:VCC", "esp:3V3", "red", [ "v28.8", "h-86.4" ] ],
+    [ "dht1:GND", "esp:GND.1", "black", [ "v38.4", "h-96" ] ],
+    [ "dht1:SDA", "esp:D15", "green", [ "v19.2", "h-67.2" ] ],
+    [ "esp:D2", "led1:A", "orange", [ "h57.6", "v19.2" ] ],
+    [ "led1:C", "r1:1", "black", [ "v0" ] ],
+    [ "r1:2", "esp:GND.1", "black", [ "h-86.4", "v-38.4" ] ]
+  ],
+  "dependencies": {}
+}
