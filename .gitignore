@@ -1,0 +1,11 @@
+# Variáveis de ambiente e segredos (nunca versionar credenciais reais)
+.env
+.env.*
+!.env.example
+
+# Dependências e arquivos temporários
+node_modules/
+dist/
+.supabase/
+.DS_Store
+Thumbs.db
