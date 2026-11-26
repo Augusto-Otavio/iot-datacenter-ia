@@ -12,7 +12,7 @@
 - **Projeto Simulado no Wokwi (ESP32 + DHT22):** `https://wokwi.com/projects/481616239057175553`
 - **Painel Web Publicado (Cloudflare Pages):** `https://iot-datacenter-ia.pages.dev`
 - **Endpoint da API REST (Supabase Edge Function):** `https://tvpctlctyjzgdfzcxyus.supabase.co/functions/v1/telemetry`
-- **Vídeo de Demonstração (YouTube — Não Listado):** `https://youtu.be/<ID_DO_VIDEO>`
+- **Vídeo de Demonstração (YouTube — Não Listado):** `https://www.youtube.com/watch?v=tpbI8LF64Jw`
 
 ---
 
