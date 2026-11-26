@@ -1,160 +1,121 @@
-/**
- * Projeto Integrador de Monitoramento IoT — AI Data Center Thermal Monitor
- * Bloco 1: Sensor Simulado no Wokwi (ESP32 + DHT22 + LED de Alerta)
- *
- * Tema: Monitoramento Térmico de Rack de GPUs em Data Center de IA
- * Arquitetura: Opção B — Envio direto por HTTPS para Supabase Edge Function (API REST)
- *
- * Conceitos de Arquitetura de Computadores aplicados:
- * 1. Entrada/Saída (I/O): Comunicação digital single-wire via registrador GPIO 15 com o sensor DHT22
- *    e saída digital via GPIO 2 para acionamento de atuador visual (LED de alerta térmico).
- * 2. Processamento (CPU/FPU): Validação de integridade (NaN), filtro de média móvel em memória SRAM
- *    (buffer circular de 3 amostras) e comparação lógica com limiar de Thermal Throttling (30.0 °C)
- *    na ULA/FPU do processador Xtensa Dual-Core LX6.
- * 3. Comunicação em Rede: Empacotamento JSON em buffer de memória e transmissão via pilha TCP/IP + TLS (HTTPS)
- *    com reuso de sessão Keep-Alive para reduzir handshakes TLS no gateway.
- */
-
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <DHT.h>
 
-// ==================== CONFIGURAÇÕES DE REDE (WOKWI) ====================
+// Rede Wi-Fi do simulador Wokwi
 const char* WIFI_SSID = "Wokwi-GUEST";
 const char* WIFI_PASSWORD = "";
 
-// ==================== CONFIGURAÇÃO DA API REST (HTTPS) ====================
-// Endpoint da Supabase Edge Function do projeto iot-datacenter-ia
+// Endpoint da API REST no Supabase
 const char* API_URL = "https://tvpctlctyjzgdfzcxyus.supabase.co/functions/v1/telemetry";
 
-// Chave opcional (mantida fora do repositório público caso JWT seja ativado)
-const char* API_BEARER_TOKEN = "";
-
-// Identificação do dispositivo e parâmetros do Data Center de IA
+// Identificacao do dispositivo e grandeza monitorada
 const char* DEVICE_ID = "esp32-rack-ia-01";
 const char* METRIC_NAME = "temperatura_rack_gpu";
 const char* METRIC_UNIT = "°C";
 
-// ==================== HARDWARE E PINOS (GPIO) ====================
-#define DHTPIN 15       // Pino GPIO 15 conectado ao pino SDA/DATA do DHT22
-#define DHTTYPE DHT22   // Modelo do sensor
-#define ALERT_LED_PIN 2 // LED de alerta de superaquecimento do Rack (GPIO 2)
+// Pinos usados no ESP32
+#define DHTPIN 15
+#define DHTTYPE DHT22
+#define LED_ALERTA 2
 
 DHT dht(DHTPIN, DHTTYPE);
-WiFiClientSecure secureClient;
+WiFiClientSecure clienteTLS;
 HTTPClient https;
 
-// ==================== PARÂMETROS DE MONITORAMENTO ====================
-const unsigned long COLLECTION_INTERVAL_MS = 5000; // Intervalo de coleta: 5 segundos
-const float TEMP_ALERT_THRESHOLD = 30.0;           // Alerta se temperatura > 30.0 °C (Risco de Thermal Throttling nas GPUs)
-const float TEMP_MIN_VALID = -40.0;                // Limite físico inferior do DHT22
-const float TEMP_MAX_VALID = 80.0;                 // Limite físico superior do DHT22
+// Regras de coleta e alerta (> 30 °C)
+const unsigned long INTERVALO_COLETA_MS = 5000;
+const float LIMITE_ALERTA = 30.0;
+const float TEMP_MIN = -40.0;
+const float TEMP_MAX = 80.0;
 
-// ==================== BUFFER EM MEMÓRIA SRAM (MÉDIA MÓVEL) ====================
-const int WINDOW_SIZE = 3;
-float tempBuffer[WINDOW_SIZE];
-int bufferIndex = 0;
-int validSamplesCount = 0;
-unsigned long lastCollectionTime = 0;
+// Buffer da media movel (ultimas 3 leituras)
+const int TAMANHO_JANELA = 3;
+float bufferTemp[TAMANHO_JANELA];
+int indiceBuffer = 0;
+int totalAmostras = 0;
+unsigned long ultimaColeta = 0;
 
-/**
- * Calcula a média móvel das últimas N leituras armazenadas na SRAM do ESP32.
- * Esse tratamento atenua flutuações rápidas de fluxo de ar nos corredores do Data Center.
- */
-float computeMovingAverage(float newSample) {
-  tempBuffer[bufferIndex] = newSample;
-  bufferIndex = (bufferIndex + 1) % WINDOW_SIZE;
-  if (validSamplesCount < WINDOW_SIZE) {
-    validSamplesCount++;
+float calcularMediaMovel(float novaLeitura) {
+  bufferTemp[indiceBuffer] = novaLeitura;
+  indiceBuffer = (indiceBuffer + 1) % TAMANHO_JANELA;
+
+  if (totalAmostras < TAMANHO_JANELA) {
+    totalAmostras++;
   }
 
-  float sum = 0.0;
-  for (int i = 0; i < validSamplesCount; i++) {
-    sum += tempBuffer[i];
+  float soma = 0.0;
+  for (int i = 0; i < totalAmostras; i++) {
+    soma += bufferTemp[i];
   }
-  return sum / validSamplesCount;
+
+  return soma / totalAmostras;
 }
 
-void connectWiFi() {
-  Serial.print("[WIFI] Conectando a ");
+void conectarWiFi() {
+  Serial.print("[WiFi] Conectando em ");
   Serial.println(WIFI_SSID);
+
   WiFi.disconnect(true);
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD, 6);
 
-  int attempts = 0;
-  while (WiFi.status() != WL_CONNECTED && attempts < 30) {
+  int tentativas = 0;
+  while (WiFi.status() != WL_CONNECTED && tentativas < 30) {
     delay(400);
     Serial.print(".");
-    attempts++;
+    tentativas++;
   }
 
   if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("\n[WIFI] Conectado com sucesso!");
-    Serial.print("[WIFI] Endereco IP: ");
-    Serial.println(WiFi.localIP());
+    Serial.println("\n[WiFi] Conectado! IP: " + WiFi.localIP().toString());
   } else {
-    Serial.println("\n[WIFI] Tentando reconectar no proximo ciclo...");
+    Serial.println("\n[WiFi] Falha ao conectar, tentando novamente no proximo ciclo.");
   }
 }
 
 void setup() {
   Serial.begin(115200);
-  pinMode(ALERT_LED_PIN, OUTPUT);
-  digitalWrite(ALERT_LED_PIN, LOW);
+  pinMode(LED_ALERTA, OUTPUT);
+  digitalWrite(LED_ALERTA, LOW);
 
   dht.begin();
-  secureClient.setInsecure(); // Permite TLS no simulador Wokwi sem bundle de CA raiz na Flash
-  https.setReuse(true);       // Reutiliza conexão TCP/TLS (Keep-Alive) evitando bloqueio no gateway Wokwi
+  clienteTLS.setInsecure();
+  https.setReuse(true); // Reaproveita a conexao TLS entre envios
 
-  Serial.println("==========================================================");
-  Serial.println("  AI Data Center IoT — Monitoramento Termico de Rack GPU");
-  Serial.println("  Dispositivo: esp32-rack-ia-01 | Sensor: DHT22 (GPIO 15)");
-  Serial.println("==========================================================");
-
-  connectWiFi();
+  Serial.println("Monitoramento Termico - Rack IA (esp32-rack-ia-01)");
+  conectarWiFi();
 }
 
 void loop() {
-  unsigned long currentMillis = millis();
-
-  // Controle de temporização não-bloqueante baseado no registrador de ticks (millis)
-  if (currentMillis - lastCollectionTime < COLLECTION_INTERVAL_MS) {
+  unsigned long agora = millis();
+  if (agora - ultimaColeta < INTERVALO_COLETA_MS) {
     return;
   }
-  lastCollectionTime = currentMillis;
+  ultimaColeta = agora;
 
-  // 1. Coleta das grandezas físicas via barramento digital GPIO 15
-  float rawTemp = dht.readTemperature();
-  float rawHumidity = dht.readHumidity();
+  float tempBruta = dht.readTemperature();
+  float umidade = dht.readHumidity();
 
-  // 2. Tratamento 1: Validação de integridade e faixa física do sensor
-  if (isnan(rawTemp) || isnan(rawHumidity) || rawTemp < TEMP_MIN_VALID || rawTemp > TEMP_MAX_VALID) {
-    Serial.println("[ERRO] Falha na leitura do sensor DHT22 (dado invalido ou fora de faixa)!");
+  // Descarta leituras invalidas ou fora da faixa do sensor
+  if (isnan(tempBruta) || isnan(umidade) || tempBruta < TEMP_MIN || tempBruta > TEMP_MAX) {
+    Serial.println("[Erro] Falha ao ler o sensor DHT22.");
     return;
   }
 
-  // 3. Tratamento 2: Filtro de Média Móvel (suavização na CPU/FPU)
-  float processedTemp = computeMovingAverage(rawTemp);
+  // Calcula media movel e verifica se passou do limite
+  float tempMedia = calcularMediaMovel(tempBruta);
+  bool alerta = (tempMedia > LIMITE_ALERTA);
+  digitalWrite(LED_ALERTA, alerta ? HIGH : LOW);
 
-  // 4. Tratamento 3: Comparação com limite crítico do Data Center (30.0 °C)
-  bool isAlert = (processedTemp > TEMP_ALERT_THRESHOLD);
-  digitalWrite(ALERT_LED_PIN, isAlert ? HIGH : LOW);
+  Serial.printf("Temp bruta: %.2f °C | Media: %.2f °C | Umidade: %.1f%% | Status: %s\n",
+                tempBruta, tempMedia, umidade, alerta ? "ALERTA (> 30 °C)" : "NORMAL");
 
-  // Log detalhado no Monitor Serial para demonstração no vídeo
-  Serial.println("----------------------------------------------------------");
-  Serial.printf("[SENSOR RACK IA] Temp Bruta: %.2f °C | Temp Media (Tratada): %.2f °C | Umidade: %.1f %%\n",
-                rawTemp, processedTemp, rawHumidity);
-  Serial.printf("[STATUS TERMICO] Limite: %.2f °C | Condicao: %s\n",
-                TEMP_ALERT_THRESHOLD, isAlert ? "ALERTA CRITICO (SUPERAQUECIMENTO / THERMAL THROTTLING!)" : "NORMAL (OPERACAO SEGURA)");
-
-  // 5. Envio via HTTPS POST para a API REST
   if (WiFi.status() != WL_CONNECTED) {
-    connectWiFi();
+    conectarWiFi();
   }
 
-  // Montagem do payload JSON com identificação do dispositivo e grandeza medida
   char payload[320];
   snprintf(
     payload,
@@ -162,50 +123,39 @@ void loop() {
     "{\"device_id\":\"%s\",\"metric\":\"%s\",\"value\":%.2f,\"raw_value\":%.2f,\"humidity\":%.1f,\"unit\":\"%s\",\"threshold\":%.2f,\"alert\":%s}",
     DEVICE_ID,
     METRIC_NAME,
-    processedTemp,
-    rawTemp,
-    rawHumidity,
+    tempMedia,
+    tempBruta,
+    umidade,
     METRIC_UNIT,
-    TEMP_ALERT_THRESHOLD,
-    isAlert ? "true" : "false"
+    LIMITE_ALERTA,
+    alerta ? "true" : "false"
   );
 
-  Serial.print("[HTTPS POST] Payload enviado: ");
-  Serial.println(payload);
-
-  if (https.begin(secureClient, API_URL)) {
+  if (https.begin(clienteTLS, API_URL)) {
     https.setTimeout(8000);
     https.addHeader("Content-Type", "application/json");
     https.addHeader("Connection", "keep-alive");
-    if (strlen(API_BEARER_TOKEN) > 0) {
-      String authHeader = String("Bearer ") + API_BEARER_TOKEN;
-      https.addHeader("Authorization", authHeader);
-      https.addHeader("apikey", API_BEARER_TOKEN);
-    }
 
-    int httpResponseCode = https.POST(payload);
+    int codigoHttp = https.POST(payload);
 
-    // Se o gateway Wokwi fechar o socket antigo, reconecta o cliente TLS uma vez imediatamente
-    if (httpResponseCode < 0) {
+    // Se a conexao antiga cair no gateway, abre uma nova uma vez
+    if (codigoHttp < 0) {
       https.end();
-      secureClient.stop();
-      secureClient.setInsecure();
-      if (https.begin(secureClient, API_URL)) {
+      clienteTLS.stop();
+      clienteTLS.setInsecure();
+      if (https.begin(clienteTLS, API_URL)) {
         https.addHeader("Content-Type", "application/json");
-        httpResponseCode = https.POST(payload);
+        codigoHttp = https.POST(payload);
       }
     }
 
-    if (httpResponseCode > 0) {
-      String responseBody = https.getString();
-      Serial.printf("[API REST] Codigo HTTP: %d | Resposta: %s\n", httpResponseCode, responseBody.c_str());
+    if (codigoHttp > 0) {
+      Serial.printf("[API] HTTP %d -> %s\n", codigoHttp, https.getString().c_str());
     } else {
-      Serial.printf("[API REST] Falha no envio HTTPS: %s (Codigo: %d)\n",
-                    https.errorToString(httpResponseCode).c_str(), httpResponseCode);
+      Serial.printf("[API] Erro no envio HTTPS (%d): %s\n",
+                    codigoHttp, https.errorToString(codigoHttp).c_str());
     }
 
     https.end();
-  } else {
-    Serial.println("[API REST] Nao foi possivel inicializar a conexao HTTPS.");
   }
 }
